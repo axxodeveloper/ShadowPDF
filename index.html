@@ -1,0 +1,515 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shadow PDF (Offline)</title>
+    
+    <!-- STYLES: Tailwind CSS Local -->
+    <link rel="stylesheet" href="lib/css/tailwind.min.css">
+    
+    <!-- LIBRARIES: React  Local -->
+    <script src="lib/js/react.production.min.js"></script>
+    <script src="lib/js/react-dom.production.min.js"></script>
+    
+    <!-- LIBRARIES: Babel Local -->
+    <script src="lib/js/babel.min.js"></script>
+
+    <!-- LIBRARIES: PDF.js Local -->
+    <script src="lib/js/pdf.min.js"></script>
+    <script>
+        
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'lib/js/pdf.worker.min.js';
+    </script>
+
+    <!-- LIBRARIES: Turndown Local -->
+    <script src="lib/js/turndown.js"></script>
+
+    <style>
+        /* Colour Personalization */
+        /* Since we are using static CSS instead of a JS configurator,
+           we define here the colors of the theme used in the app */
+        
+        .bg-primary { background-color: #10B981 !important; } /* Emerald 500 */
+        .hover\:bg-green-600:hover { background-color: #059669 !important; }
+        .text-primary { color: #10B981 !important; }
+        .border-primary { border-color: #10B981 !important; }
+        
+        .bg-secondary { background-color: #F97316 !important; } /* Orange 500 */
+        .hover\:bg-orange-600:hover { background-color: #EA580C !important; }
+        .text-secondary { color: #F97316 !important; }
+        
+        .bg-surfaceLight { background-color: #ffffff !important; }
+        .bg-surfaceDark { background-color: #1f2937 !important; } /* Gray 800 */
+        
+        .bg-bgLight { background-color: #f3f4f6 !important; } /* Gray 100 */
+        .bg-bgDark { background-color: #111827 !important; } /* Gray 900 */
+
+        /* Scrollbar customizations for preview */
+        .preview-scroll::-webkit-scrollbar {
+            width: 8px;
+        }
+        .preview-scroll::-webkit-scrollbar-track {
+            background: rgba(0,0,0,0.1); 
+            border-radius: 4px;
+        }
+        .preview-scroll::-webkit-scrollbar-thumb {
+            background: rgba(0,0,0,0.2); 
+            border-radius: 4px;
+        }
+        .dark .preview-scroll::-webkit-scrollbar-track {
+            background: rgba(255,255,255,0.1); 
+        }
+        .dark .preview-scroll::-webkit-scrollbar-thumb {
+            background: rgba(255,255,255,0.2); 
+        }
+
+        /* Animazione drag & drop */
+        .drag-active {
+            border-color: #10B981 !important;
+            background-color: rgba(16, 185, 129, 0.1) !important;
+            transform: scale(1.02);
+        }
+
+        /* GLASSMORPHISM EFFECT */
+        .glassmorphism {
+            background: rgba(255, 255, 255, 0.1) !important;
+            backdrop-filter: blur(10px) !important;
+            -webkit-backdrop-filter: blur(10px) !important;
+            border: 1px solid rgba(255, 255, 255, 0.2) !important;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .dark .glassmorphism {
+            background: rgba(31, 41, 55, 0.3) !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        }
+
+        /* Footer Styles */
+        .footer-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            color: #10B981;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            font-size: 0.875rem;
+        }
+
+        .footer-link:hover {
+            color: #059669;
+            transform: translateY(-2px);
+        }
+
+        .dark .footer-link {
+            color: #10B981;
+        }
+
+        .dark .footer-link:hover {
+            color: #34D399;
+        }
+
+        .social-icon {
+            width: 20px;
+            height: 20px;
+            display: inline-block;
+        }
+
+        .footer-divider {
+            color: #D1D5DB;
+        }
+
+        .dark .footer-divider {
+            color: #4B5563;
+        }
+    </style>
+</head>
+<body class="transition-colors duration-300">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        // --- DICTIONARY OF LANGUAGES ---
+        const translations = {
+            en: {
+                title: "- Shadow PDF -",
+                dropTitle: "Drag & Drop your PDFs here",
+                dropSubtitle: "or click the button below",
+                uploadBtn: "Upload PDF",
+                formatLabel: "Output Format:",
+                processing: "Processing...",
+                previewTitle: "Merged Document Preview",
+                resetBtn: "Load more PDFs",
+                downloadBtn: "Download Document",
+                fileCount: "files selected",
+                error: "Error reading file",
+                formats: {
+                    txt: "Plain Text (.txt)",
+                    md: "Markdown (.md)",
+                    html: "HTML (.html)"
+                }
+            }
+        };
+
+        // --- MAIN COMPONENT ---
+        function App() {
+            // States of the application
+            const [lang, setLang] = useState('en');
+            const [theme, setTheme] = useState('light');
+            const [step, setStep] = useState('input'); // input, processing, result
+            const [files, setFiles] = useState([]);
+            const [outputFormat, setOutputFormat] = useState('txt');
+            const [progress, setProgress] = useState(0);
+            const [finalText, setFinalText] = useState('');
+            const [isDragging, setIsDragging] = useState(false);
+            
+            const fileInputRef = useRef(null);
+
+            // 1. Detection of Language and Theme at Startup
+            useEffect(() => {
+                // Language
+                const userLang = navigator.language || navigator.userLanguage;
+                setLang(userLang.startsWith('it') ? 'it' : 'en');
+
+                // Theme
+                const darkModeQuery = window.matchMedia('(prefers-color-scheme: dark)');
+                const updateTheme = (e) => {
+                    const isDark = e.matches;
+                    setTheme(isDark ? 'dark' : 'light');
+                    if (isDark) {
+                        document.documentElement.classList.add('dark');
+                        document.body.classList.add('bg-bgDark');
+                        document.body.classList.remove('bg-bgLight');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                        document.body.classList.add('bg-bgLight');
+                        document.body.classList.remove('bg-bgDark');
+                    }
+                };
+                
+                // Set initial state and listener
+                updateTheme(darkModeQuery);
+                darkModeQuery.addEventListener('change', updateTheme);
+                return () => darkModeQuery.removeEventListener('change', updateTheme);
+            }, []);
+
+            const t = translations[lang];
+
+            // --- HANDLING DRAG & DROP ---
+            const handleDragOver = (e) => {
+                e.preventDefault();
+                setIsDragging(true);
+            };
+
+            const handleDragLeave = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setIsDragging(false);
+                if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                    const pdfFiles = Array.from(e.dataTransfer.files).filter(f => f.type === "application/pdf" || f.name.endsWith('.pdf'));
+                    if (pdfFiles.length > 0) {
+                        startProcessing(pdfFiles);
+                    }
+                }
+            };
+
+            const handleFileSelect = (e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                    const pdfFiles = Array.from(e.target.files);
+                    startProcessing(pdfFiles);
+                }
+            };
+
+            // --- PDF EXTRACTION LOGIC (The heart of the system) ---
+            const startProcessing = async (selectedFiles) => {
+                setFiles(selectedFiles);
+                setStep('processing');
+                setProgress(0);
+                
+                let extractedContent = "";
+                let totalPages = 0; 
+                
+                const turndownService = new TurndownService();
+
+                try {
+                    for (let i = 0; i < selectedFiles.length; i++) {
+                        const file = selectedFiles[i];
+                        const arrayBuffer = await file.arrayBuffer();
+                        
+                        // Upload the PDF document
+                        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+                        
+                        // File header
+                        if (outputFormat === 'html' || outputFormat === 'md') {
+                            extractedContent += `<h1>File: ${file.name}</h1>\n<hr>\n`;
+                        } else {
+                            extractedContent += `\n\n--- FILE: ${file.name} ---\n\n`;
+                        }
+
+                        // Iterate through the pages
+                        for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                            const page = await pdf.getPage(pageNum);
+                            const textContent = await page.getTextContent();
+                            
+                            // Here the heuristic magic happens to reconstruct the text
+                            let pageText = "";
+                            let lastY = -1;
+                            
+                            // Sort the items by Y (top to bottom) and then by X (left to right)
+                            const items = textContent.items.sort((a, b) => {
+                                if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
+                                    return b.transform[5] - a.transform[5];
+                                }
+                                return a.transform[4] - b.transform[4];
+                            });
+
+                            let isFirstItem = true;
+
+                            items.forEach(item => {
+                                const text = item.str;
+                                if (!text.trim()) return;
+
+                                const fontSize = Math.sqrt(item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]);
+                                
+                                if (!isFirstItem && lastY !== -1 && Math.abs(item.transform[5] - lastY) > 10) {
+                                    if (outputFormat === 'html' || outputFormat === 'md') {
+                                        pageText += "<br>"; 
+                                    } else {
+                                        pageText += "\n";
+                                    }
+                                }
+                                
+                                if ((outputFormat === 'html' || outputFormat === 'md') && fontSize > 14) {
+                                     pageText += ` <strong>${text}</strong> `;
+                                } else {
+                                     pageText += text + " ";
+                                }
+
+                                lastY = item.transform[5];
+                                isFirstItem = false;
+                            });
+
+                            if (outputFormat === 'html' || outputFormat === 'md') {
+                                extractedContent += `<div class="page-content">${pageText}</div><br><br>`;
+                            } else {
+                                extractedContent += pageText + "\n\n";
+                            }
+
+                            const fileProgress = (i / selectedFiles.length) * 100;
+                            const pageContribution = (pageNum / pdf.numPages) * (100 / selectedFiles.length);
+                            setProgress(Math.min(Math.round(fileProgress + pageContribution), 99));
+                        }
+                    }
+
+                    let result = extractedContent;
+                    if (outputFormat === 'md') {
+                        result = turndownService.turndown(extractedContent);
+                    } else if (outputFormat === 'html') {
+                        result = `<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Merged Content</title></head><body style='font-family: sans-serif; padding: 20px;'>${extractedContent}</body></html>`;
+                    }
+
+                    setFinalText(result);
+                    setProgress(100);
+                    setTimeout(() => setStep('result'), 500);
+
+                } catch (err) {
+                    console.error(err);
+                    alert(t.error + ": " + err.message);
+                    setStep('input');
+                }
+            };
+
+            const downloadFile = () => {
+                const mimeTypes = {
+                    txt: 'text/plain',
+                    md: 'text/markdown',
+                    html: 'text/html'
+                };
+                
+                const blob = new Blob([finalText], { type: mimeTypes[outputFormat] });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `merged_document.${outputFormat}`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+            };
+
+            const resetApp = () => {
+                setFiles([]);
+                setFinalText('');
+                setProgress(0);
+                setStep('input');
+            };
+
+            return (
+                <div className={`min-h-screen flex items-center justify-center p-4 transition-colors duration-300 ${theme === 'dark' ? 'text-white' : 'text-gray-800'}`}>
+                    
+                    <div className="w-full max-w-4xl transition-all duration-500">
+                        
+                        <h1 className="text-3xl font-bold text-center mb-8 tracking-tight">{t.title}</h1>
+
+                        <div className={`rounded-2xl shadow-xl overflow-hidden transition-all duration-300 glassmorphism ${theme === 'dark' ? 'border border-gray-700' : ''}`}>
+                            
+                            {step === 'input' && (
+                                <div className="p-8 md:p-12 animate-fade-in">
+                                    
+                                    <div 
+                                        className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-all duration-300 ${isDragging ? 'drag-active' : ''} ${theme === 'dark' ? 'border-gray-600 hover:border-gray-400 bg-gray-800' : 'border-gray-300 hover:border-gray-400 bg-gray-50'}`}
+                                        onDragOver={handleDragOver}
+                                        onDragLeave={handleDragLeave}
+                                        onDrop={handleDrop}
+                                        onClick={() => fileInputRef.current.click()}
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" className={`h-16 w-16 mx-auto mb-4 ${theme === 'dark' ? 'text-gray-400' : 'text-gray-400'}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 13h6m-3-3v6m5 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                                        </svg>
+                                        <h3 className="text-xl font-semibold mb-2">{t.dropTitle}</h3>
+                                        <p className={`text-sm ${theme === 'dark' ? 'text-gray-400' : 'text-gray-500'}`}>{t.dropSubtitle}</p>
+                                        
+                                        <input 
+                                            type="file" 
+                                            multiple 
+                                            accept=".pdf" 
+                                            ref={fileInputRef} 
+                                            className="hidden" 
+                                            onChange={handleFileSelect}
+                                        />
+                                    </div>
+
+                                    <div className="mt-8 flex flex-col items-center gap-6">
+                                        
+                                        <button 
+                                            onClick={() => fileInputRef.current.click()}
+                                            className="bg-primary hover:bg-green-600 text-white font-bold py-3 px-8 rounded-full shadow-lg transform transition hover:scale-105 active:scale-95 text-lg"
+                                        >
+                                            {t.uploadBtn}
+                                        </button>
+
+                                        <div className="flex flex-col sm:flex-row items-center gap-3 bg-opacity-10 p-2 rounded-lg">
+                                            <span className={`font-medium ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>{t.formatLabel}</span>
+                                            <div className="flex bg-gray-200 dark:bg-gray-700 rounded-lg p-1">
+                                                {['txt', 'md', 'html'].map((fmt) => (
+                                                    <button
+                                                        key={fmt}
+                                                        onClick={() => setOutputFormat(fmt)}
+                                                        className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${outputFormat === fmt 
+                                                            ? 'bg-white dark:bg-gray-600 text-primary shadow-sm' 
+                                                            : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200'}`}
+                                                    >
+                                                        {fmt.toUpperCase()}
+                                                    </button>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {step === 'processing' && (
+                                <div className="p-12 text-center animate-fade-in">
+                                    <h2 className="text-2xl font-bold mb-6">{t.processing}</h2>
+                                    
+                                    <div className="w-full h-6 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden relative">
+                                        <div 
+                                            className="h-full bg-primary transition-all duration-300 ease-out flex items-center justify-center text-xs text-white font-bold"
+                                            style={{ width: `${progress}%` }}
+                                        >
+                                            {progress > 10 && `${progress}%`}
+                                        </div>
+                                    </div>
+                                    <p className="mt-4 text-gray-500 dark:text-gray-400">{files.length} {t.fileCount}</p>
+                                </div>
+                            )}
+
+                            {step === 'result' && (
+                                <div className="flex flex-col h-[80vh] md:h-[70vh] animate-fade-in">
+                                    <div className="p-4 border-b dark:border-gray-700 flex justify-between items-center bg-opacity-50">
+                                        <h3 className="font-semibold text-lg">{t.previewTitle}</h3>
+                                        <span className="text-xs uppercase px-2 py-1 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300 font-mono">
+                                            .{outputFormat}
+                                        </span>
+                                    </div>
+                                    
+                                    <div className="flex-1 p-6 overflow-auto preview-scroll bg-gray-50 dark:bg-gray-900 font-mono text-sm leading-relaxed">
+                                        {outputFormat === 'html' ? (
+                                            <div dangerouslySetInnerHTML={{ __html: finalText }} className="text-gray-700 dark:text-gray-300 font-sans" />
+                                        ) : (
+                                            <pre className="whitespace-pre-wrap font-inherit text-gray-700 dark:text-gray-300 font-sans">
+                                                {finalText}
+                                            </pre>
+                                        )}
+                                    </div>
+
+                                    <div className="p-6 border-t dark:border-gray-700 flex flex-col sm:flex-row justify-center gap-4 bg-surfaceLight dark:bg-surfaceDark z-10">
+                                        
+                                        <button 
+                                            onClick={resetApp}
+                                            className="bg-secondary hover:bg-orange-600 text-white font-bold py-3 px-6 rounded-full shadow-md transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                                        >
+                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path></svg>
+                                            {t.resetBtn}
+                                        </button>
+
+                                        <button 
+                                            onClick={downloadFile}
+                                            className="bg-primary hover:bg-green-600 text-white font-bold py-3 px-6 rounded-full shadow-md transform transition hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                                        >
+                                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+                                            {t.downloadBtn}
+                                        </button>
+
+                                    </div>
+                                </div>
+                            )}
+
+                        </div>
+                        
+                        <div className={`text-center mt-6 text-sm transition-all duration-300 ${theme === 'dark' ? 'text-gray-300' : 'text-gray-600'}`}>
+                            <p className="mb-2">Created by <span className="font-semibold text-primary">AXXO</span></p>
+                            <div className="flex justify-center items-center gap-4">
+                                <a 
+                                    href="https://github.com/axxodeveloper" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="footer-link"
+                                    title="GitHub"
+                                >
+                                    <svg className="social-icon" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v 3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                                    </svg>
+                                    GitHub
+                                </a>
+                                <span className="footer-divider">•</span>
+                                <a 
+                                    href="https://www.instagram.com/axxo.developer" 
+                                    target="_blank" 
+                                    rel="noopener noreferrer"
+                                    className="footer-link"
+                                    title="Instagram"
+                                >
+                                    <svg className="social-icon" fill="currentColor" viewBox="0 0 24 24">
+                                        <path d="M12 2.163c3.204 0 3.584.012 4.85.07 3.252.148 4.771 1.691 4.919 4.919.058 1.265.069 1.645.069 4.849 0 3.205-.012 3.584-.069 4.849-.149 3.225-1.664 4.771-4.919 4.919-1.266.058-1.644.07-4.85.07-3.204 0-3.584-.012-4.849-.07-3.26-.149-4.771-1.699-4.919-4.92-.058-1.265-.07-1.644-.07-4.849 0-3.204.013-3.583.07-4.849.149-3.227 1.664-4.771 4.919-4.919 1.266-.057 1.645-.069 4.849-.069zm0-2.163c-3.259 0-3.667.014-4.947.072-4.358.2-6.78 2.618-6.98 6.98-.059 1.281-.073 1.689-.073 4.948 0 3.259.014 3.668.072 4.948.2 4.358 2.618 6.78 6.98 6.98 1.281.058 1.689.072 4.948.072 3.259 0 3.668-.014 4.948-.072 4.354-.2 6.782-2.618 6.979-6.98.059-1.28.073-1.689.073-4.948 0-3.259-.014-3.667-.072-4.947-.196-4.354-2.617-6.78-6.979-6.98-1.281-.059-1.69-.073-4.949-.073zM5.838 12a6.162 6.162 0 1 1 12.324 0 6.162 6.162 0 0 1-12.324 0zM12 16a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm4.965-10.322a1.44 1.44 0 1 1 2.881.001 1.44 1.44 0 0 1-2.881-.001z"/>
+                                    </svg>
+                                    Instagram
+                                </a>
+                            </div>
+                        </div>
+
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
