@@ -233,8 +233,17 @@
                 
                 let extractedContent = "";
                 let totalPages = 0; 
-                
-                const turndownService = new TurndownService();
+
+                const renderPageImage = async (page) => {
+                    const scale = 1.25;
+                    const viewport = page.getViewport({ scale });
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    canvas.width = viewport.width;
+                    canvas.height = viewport.height;
+                    await page.render({ canvasContext: context, viewport }).promise;
+                    return canvas.toDataURL('image/png');
+                };
 
                 try {
                     for (let i = 0; i < selectedFiles.length; i++) {
@@ -245,8 +254,10 @@
                         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
                         
                         // File header
-                        if (outputFormat === 'html' || outputFormat === 'md') {
+                        if (outputFormat === 'html') {
                             extractedContent += `<h1>File: ${file.name}</h1>\n<hr>\n`;
+                        } else if (outputFormat === 'md') {
+                            extractedContent += `# File: ${file.name}\n\n---\n\n`;
                         } else {
                             extractedContent += `\n\n--- FILE: ${file.name} ---\n\n`;
                         }
@@ -254,50 +265,64 @@
                         // Iterate through the pages
                         for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
                             const page = await pdf.getPage(pageNum);
-                            const textContent = await page.getTextContent();
-                            
-                            // Here the heuristic magic happens to reconstruct the text
-                            let pageText = "";
-                            let lastY = -1;
-                            
-                            // Sort the items by Y (top to bottom) and then by X (left to right)
-                            const items = textContent.items.sort((a, b) => {
-                                if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
-                                    return b.transform[5] - a.transform[5];
-                                }
-                                return a.transform[4] - b.transform[4];
-                            });
-
-                            let isFirstItem = true;
-
-                            items.forEach(item => {
-                                const text = item.str;
-                                if (!text.trim()) return;
-
-                                const fontSize = Math.sqrt(item.transform[0] * item.transform[0] + item.transform[1] * item.transform[1]);
-                                
-                                if (!isFirstItem && lastY !== -1 && Math.abs(item.transform[5] - lastY) > 10) {
-                                    if (outputFormat === 'html' || outputFormat === 'md') {
-                                        pageText += "<br>"; 
-                                    } else {
-                                        pageText += "\n";
-                                    }
-                                }
-                                
-                                if ((outputFormat === 'html' || outputFormat === 'md') && fontSize > 14) {
-                                     pageText += ` <strong>${text}</strong> `;
-                                } else {
-                                     pageText += text + " ";
-                                }
-
-                                lastY = item.transform[5];
-                                isFirstItem = false;
-                            });
 
                             if (outputFormat === 'html' || outputFormat === 'md') {
-                                extractedContent += `<div class="page-content">${pageText}</div><br><br>`;
+                                const pageImage = await renderPageImage(page);
+
+                                if (outputFormat === 'html') {
+                                    extractedContent += `<section class="pdf-page" style="margin-bottom:40px;"><div style="margin-bottom:18px;"><strong>Page ${pageNum}</strong></div><figure style="margin: 24px 0; text-align:center;"><img src="${pageImage}" alt="${file.name} - Page ${pageNum}" style="max-width:100%; height:auto; display:block; margin:0 auto;" /><figcaption style="color:#6b7280; font-size:0.95rem; margin-top:0.5rem;">Page ${pageNum}</figcaption></figure></section>`;
+                                } else {
+                                    extractedContent += `### Page ${pageNum}\n\n![Page ${pageNum}](${pageImage})\n\n`;
+                                }
                             } else {
-                                extractedContent += pageText + "\n\n";
+                                const cleanTextItem = (value) => {
+                                    return value
+                                        .replace(/[•‣◦▪▫◆◇●]/g, '')
+                                        .replace(/[\u2022\u2023\u25E6\u25AA\u25AB\u2219\u2218\u2024\u2027\u25CF\u25CB\u25CE\u25E7]/g, '')
+                                        .replace(/[\s\u00A0]+/g, ' ')
+                                        .trim();
+                                };
+
+                                const shouldKeepLine = (line) => {
+                                    const cleanLine = line.trim();
+                                    if (!cleanLine) return false;
+                                    if (/\b(Column|Columns|Row|Rows)\b/i.test(cleanLine)) return false;
+                                    if (/^(?:\d+[\s,;:\-]*){2,}\d+$/.test(cleanLine)) return false;
+                                    if (/^[\s\d\-.,]+$/.test(cleanLine) && /\d/.test(cleanLine)) return false;
+                                    return true;
+                                };
+
+                                const textContent = await page.getTextContent({ normalizeWhitespace: true, disableCombineTextItems: false });
+                                let pageText = "";
+                                let lastY = -1;
+                                const items = (textContent.items || []).sort((a, b) => {
+                                    if (Math.abs(a.transform[5] - b.transform[5]) > 5) {
+                                        return b.transform[5] - a.transform[5];
+                                    }
+                                    return a.transform[4] - b.transform[4];
+                                });
+
+                                let isFirstItem = true;
+                                items.forEach(item => {
+                                    const rawText = cleanTextItem(item.str);
+                                    if (!rawText) return;
+
+                                    if (!isFirstItem && lastY !== -1 && Math.abs(item.transform[5] - lastY) > 10) {
+                                        pageText += "\n";
+                                    }
+                                    pageText += rawText + " ";
+                                    lastY = item.transform[5];
+                                    isFirstItem = false;
+                                });
+
+                                pageText = pageText.replace(/[ \t]+/g, ' ').replace(/\s*\n\s*/g, '\n').trim();
+                                pageText = pageText
+                                    .split('\n')
+                                    .map(line => line.trim())
+                                    .filter(line => shouldKeepLine(line))
+                                    .join('\n');
+
+                                extractedContent += `--- PAGE ${pageNum} ---\n${pageText}\n\n`;
                             }
 
                             const fileProgress = (i / selectedFiles.length) * 100;
@@ -307,11 +332,6 @@
                     }
 
                     let result = extractedContent;
-                    if (outputFormat === 'md') {
-                        result = turndownService.turndown(extractedContent);
-                    } else if (outputFormat === 'html') {
-                        result = `<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Merged Content</title></head><body style='font-family: sans-serif; padding: 20px;'>${extractedContent}</body></html>`;
-                    }
 
                     setFinalText(result);
                     setProgress(100);
@@ -330,8 +350,13 @@
                     md: 'text/markdown',
                     html: 'text/html'
                 };
+
+                let fileContent = finalText;
+                if (outputFormat === 'html') {
+                    fileContent = `<!DOCTYPE html><html><head><meta charset='UTF-8'><title>Merged Content</title></head><body style='font-family: sans-serif; padding: 20px;'>${finalText}</body></html>`;
+                }
                 
-                const blob = new Blob([finalText], { type: mimeTypes[outputFormat] });
+                const blob = new Blob([fileContent], { type: mimeTypes[outputFormat] });
                 const url = URL.createObjectURL(blob);
                 const a = document.createElement('a');
                 a.href = url;
